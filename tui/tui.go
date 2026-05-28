@@ -70,11 +70,11 @@ var (
 
 // model is the Bubble Tea model for the package-selection screen.
 type model struct {
-	manager string         // e.g. "pnpm" — shown in the header
-	choices []string       // packages the user can select, in stable order
-	cursor  int            // index of the currently highlighted row
+	manager  string           // e.g. "pnpm" — shown in the header
+	choices  []string         // packages the user can select, in stable order
+	cursor   int              // index of the currently highlighted row
 	selected map[int]struct{} // set of selected row indices
-	aborted bool           // true when the user pressed q / ctrl+c
+	aborted  bool             // true when the user pressed q / ctrl+c
 }
 
 // Init satisfies tea.Model.  No initial command is needed.

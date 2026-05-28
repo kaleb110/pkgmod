@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/kaleb110/cmd"
+	"github.com/kaleb110/pkgmod/cmd"
 )
 
 func main() {

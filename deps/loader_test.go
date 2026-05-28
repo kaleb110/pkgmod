@@ -7,7 +7,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/kaleb110/deps"
+	"github.com/kaleb110/pkgmod/deps"
 )
 
 func sorted(s []string) []string {

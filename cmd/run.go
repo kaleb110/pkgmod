@@ -8,17 +8,17 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/kaleb110/deps"
-	"github.com/kaleb110/installer"
-	"github.com/kaleb110/scanner"
-	"github.com/kaleb110/tui"
+	"github.com/kaleb110/pkgmod/deps"
+	"github.com/kaleb110/pkgmod/installer"
+	"github.com/kaleb110/pkgmod/scanner"
+	"github.com/kaleb110/pkgmod/tui"
 )
 
 // Run is the program entry point.  It accepts the raw CLI arguments so that
 // tests can drive it without spawning a subprocess.
 func Run(args []string) error {
 	fs := flag.NewFlagSet("pkgmod", flag.ContinueOnError)
-	src     := fs.String("src",     ".", "Source directory to scan for JS/TS imports")
+	src := fs.String("src", ".", "Source directory to scan for JS/TS imports")
 	// Default is empty string, not "pnpm" — an absent flag means "read from
 	// package.json" and we distinguish that from an explicit flag value.
 	manager := fs.String("manager", "", "Package manager override (pnpm, bun, npm, yarn)")
@@ -63,7 +63,7 @@ func Run(args []string) error {
 	if pkgFile.PackageManager == "" && *manager == "" {
 		return fmt.Errorf(
 			"cannot determine package manager: packageManager field is absent from package.json\n" +
-			"specify one with --manager (supported: pnpm, bun, npm, yarn)",
+				"specify one with --manager (supported: pnpm, bun, npm, yarn)",
 		)
 	}
 

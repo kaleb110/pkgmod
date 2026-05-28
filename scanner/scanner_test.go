@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kaleb110/scanner"
+	"github.com/kaleb110/pkgmod/scanner"
 )
 
 func sorted(s []string) []string {

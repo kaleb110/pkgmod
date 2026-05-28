@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kaleb110/cmd"
+	"github.com/kaleb110/pkgmod/cmd"
 )
 
 // ── helpers ───────────────────────────────────────────────────────────────────

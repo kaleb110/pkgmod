@@ -1,4 +1,4 @@
-module github.com/kaleb110
+module github.com/kaleb110/pkgmod
 
 go 1.25.0
 
