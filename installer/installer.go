@@ -49,6 +49,25 @@ var managerNames = map[string]Manager{
 	"yarn": ManagerYarn,
 }
 
+// managerStrings is the reverse of managerNames: enum → canonical string.
+// Used by Manager.String() so fmt and logs display human-readable names.
+var managerStrings = func() map[Manager]string {
+	rev := make(map[Manager]string, len(managerNames))
+	for name, m := range managerNames {
+		rev[m] = name
+	}
+	return rev
+}()
+
+// String returns the canonical lowercase name of the manager (e.g. "pnpm").
+// It satisfies fmt.Stringer so Manager prints readably in logs and errors.
+func (m Manager) String() string {
+	if s, ok := managerStrings[m]; ok {
+		return s
+	}
+	return fmt.Sprintf("Manager(%d)", int(m))
+}
+
 // ParseManager converts a user-supplied string (e.g. from the --manager flag)
 // into a Manager enum value, returning a descriptive error for unknown names.
 //

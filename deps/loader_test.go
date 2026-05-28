@@ -34,115 +34,170 @@ func writeFile(t *testing.T, dir, name, body string) {
 	}
 }
 
-// ── Load ──────────────────────────────────────────────────────────────────────
+// ── LoadFile ──────────────────────────────────────────────────────────────────
 
-// TestLoad_AllFourMaps verifies that packages declared across all four
-// dependency maps are included in the returned set.
-func TestLoad_AllFourMaps(t *testing.T) {
+// TestLoadFile_AllFourMaps verifies that packages across all four dependency
+// maps are included in File.Declared.
+func TestLoadFile_AllFourMaps(t *testing.T) {
 	dir := tmpDir(t)
 	writeFile(t, dir, "package.json", `{
-		"dependencies":         {"react":    "^18"},
+		"dependencies":         {"react":      "^18"},
 		"devDependencies":      {"typescript": "^5"},
-		"peerDependencies":     {"react-dom": "*"},
-		"optionalDependencies": {"fsevents":  "^2"}
+		"peerDependencies":     {"react-dom":  "*"},
+		"optionalDependencies": {"fsevents":   "^2"}
 	}`)
 
-	got, err := deps.Load(filepath.Join(dir, "package.json"))
+	f, err := deps.LoadFile(filepath.Join(dir, "package.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"react", "typescript", "react-dom", "fsevents"} {
-		if !got[want] {
+		if !f.Declared[want] {
 			t.Errorf("expected %q in declared deps", want)
 		}
 	}
 }
 
-// TestLoad_MissingFile verifies that a non-existent package.json is treated as
-// "no dependencies declared" rather than an error.
-func TestLoad_MissingFile(t *testing.T) {
-	got, err := deps.Load("/no/such/package.json")
+// TestLoadFile_ReadsPackageManagerField verifies that the packageManager key
+// is exposed on File so cmd can use it for manager resolution.
+func TestLoadFile_ReadsPackageManagerField(t *testing.T) {
+	dir := tmpDir(t)
+	writeFile(t, dir, "package.json", `{
+		"packageManager": "pnpm@9.1.0",
+		"dependencies": {"react": "^18"}
+	}`)
+
+	f, err := deps.LoadFile(filepath.Join(dir, "package.json"))
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
-	if len(got) != 0 {
-		t.Errorf("expected empty set, got %v", got)
+	if f.PackageManager != "pnpm@9.1.0" {
+		t.Errorf("got PackageManager=%q, want %q", f.PackageManager, "pnpm@9.1.0")
 	}
 }
 
-// TestLoad_MalformedJSON verifies that a JSON parse failure is returned as an
-// error, not silently swallowed.
-func TestLoad_MalformedJSON(t *testing.T) {
+// TestLoadFile_AbsentPackageManagerField verifies that File.PackageManager is
+// empty when the key is absent — this is the signal to fall back to the flag.
+func TestLoadFile_AbsentPackageManagerField(t *testing.T) {
+	dir := tmpDir(t)
+	writeFile(t, dir, "package.json", `{"dependencies":{"react":"^18"}}`)
+
+	f, err := deps.LoadFile(filepath.Join(dir, "package.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.PackageManager != "" {
+		t.Errorf("expected empty PackageManager, got %q", f.PackageManager)
+	}
+}
+
+// TestLoadFile_MissingFile verifies that a missing package.json is now a hard
+// error — cmd.Run is responsible for the existence check and user message.
+func TestLoadFile_MissingFile(t *testing.T) {
+	_, err := deps.LoadFile("/no/such/package.json")
+	if err == nil {
+		t.Error("expected error for missing file, got nil")
+	}
+}
+
+// TestLoadFile_MalformedJSON verifies that a JSON parse failure is returned
+// as an error.
+func TestLoadFile_MalformedJSON(t *testing.T) {
 	dir := tmpDir(t)
 	writeFile(t, dir, "package.json", `{not valid json`)
-	_, err := deps.Load(filepath.Join(dir, "package.json"))
+	_, err := deps.LoadFile(filepath.Join(dir, "package.json"))
 	if err == nil {
 		t.Error("expected parse error, got nil")
 	}
 }
 
-// TestLoad_EmptyFile verifies that `{}` returns an empty set without error.
-func TestLoad_EmptyFile(t *testing.T) {
+// TestLoadFile_PnpmVersionedKeys is the regression test for pnpm writing dep
+// keys as "pkg@version" instead of just "pkg".
+func TestLoadFile_PnpmVersionedKeys(t *testing.T) {
 	dir := tmpDir(t)
-	writeFile(t, dir, "package.json", `{}`)
-	got, err := deps.Load(filepath.Join(dir, "package.json"))
+	writeFile(t, dir, "package.json", `{
+		"packageManager": "pnpm@9.1.0",
+		"dependencies":   {"zustand": "^5.0.13"}
+	}`)
+
+	f, err := deps.LoadFile(filepath.Join(dir, "package.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 0 {
-		t.Errorf("expected empty set, got %v", got)
+	if !f.Declared["zustand"] {
+		t.Errorf("zustand should be in declared deps; got %v", f.Declared)
 	}
 }
 
-// TestLoad_PnpmVersionedKeys is the regression test for the pnpm bug where
-// dependency keys can be written as "pkg@version" instead of just "pkg".
-func TestLoad_PnpmVersionedKeys(t *testing.T) {
-	dir := tmpDir(t)
+// ── ResolveManager ────────────────────────────────────────────────────────────
 
-	// Reproduces the exact package.json from the original bug report.
-	writeFile(t, dir, "package.json", `{
-		"packageManager": "pnpm@1.2",
-		"dependencies": {
-			"zustand": "^5.0.13"
-		}
-	}`)
+// parseFn is a test stub that accepts only "pnpm", "bun", "npm", "yarn".
+func parseFn(s string) (string, error) {
+	supported := map[string]bool{"pnpm": true, "bun": true, "npm": true, "yarn": true}
+	if !supported[s] {
+		return "", fmt.Errorf("unsupported package manager %q", s)
+	}
+	return s, nil
+}
 
-	got, err := deps.Load(filepath.Join(dir, "package.json"))
+// TestResolveManager_PkgJsonFieldTakesPriority verifies that when packageManager
+// is present in package.json it wins over the --manager flag.
+func TestResolveManager_PkgJsonFieldTakesPriority(t *testing.T) {
+	got, err := deps.ResolveManager("pnpm@9.1.0", "bun", parseFn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got["zustand"] {
-		t.Errorf("zustand should be in declared deps; got %v", got)
+	if got != "pnpm" {
+		t.Errorf("got %q, want %q", got, "pnpm")
 	}
 }
 
-// TestLoad_PnpmAtVersionedKeys verifies that keys written with an explicit
-// "@version" suffix (a less common but valid pnpm format) are normalised.
-func TestLoad_PnpmAtVersionedKeys(t *testing.T) {
-	dir := tmpDir(t)
-	writeFile(t, dir, "package.json", `{
-		"dependencies": {
-			"react@^18.0.0":              "*",
-			"@tanstack/react-query@^5.0": "*"
-		}
-	}`)
-
-	got, err := deps.Load(filepath.Join(dir, "package.json"))
+// TestResolveManager_FlagUsedWhenFieldAbsent verifies that when packageManager
+// is absent the --manager flag is used.
+func TestResolveManager_FlagUsedWhenFieldAbsent(t *testing.T) {
+	got, err := deps.ResolveManager("", "bun", parseFn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"react", "@tanstack/react-query"} {
-		if !got[want] {
-			t.Errorf("expected %q after normalisation; got %v", want, got)
-		}
+	if got != "bun" {
+		t.Errorf("got %q, want %q", got, "bun")
+	}
+}
+
+// TestResolveManager_UnsupportedFieldReturnsError verifies that an unrecognised
+// value in the packageManager field is rejected with an error — the user should
+// update the field or use a supported manager, not silently fall back to the flag.
+func TestResolveManager_UnsupportedFieldReturnsError(t *testing.T) {
+	_, err := deps.ResolveManager("yarn-berry@4.0.0", "pnpm", parseFn)
+	if err == nil {
+		t.Error("expected error for unsupported manager in packageManager field")
+	}
+}
+
+// TestResolveManager_UnsupportedFlagReturnsError verifies that an unrecognised
+// --manager flag value is also rejected.
+func TestResolveManager_UnsupportedFlagReturnsError(t *testing.T) {
+	_, err := deps.ResolveManager("", "cargo", parseFn)
+	if err == nil {
+		t.Error("expected error for unsupported --manager flag value")
+	}
+}
+
+// TestResolveManager_StripsVersionFromField verifies that "pnpm@9.1.0" is
+// correctly reduced to "pnpm" before being passed to parseFn.
+func TestResolveManager_StripsVersionFromField(t *testing.T) {
+	for _, field := range []string{"pnpm@9.1.0", "bun@1.0.0", "npm@10.2.3", "yarn@3.6.0"} {
+		t.Run(field, func(t *testing.T) {
+			_, err := deps.ResolveManager(field, "pnpm", parseFn)
+			if err != nil {
+				t.Errorf("unexpected error for %q: %v", field, err)
+			}
+		})
 	}
 }
 
 // ── Diff ──────────────────────────────────────────────────────────────────────
 
-// TestDiff covers the full set of comparison outcomes: everything present,
-// everything missing, partial overlap, and false-positive prevention when
-// declared has more entries than found.
 func TestDiff(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -181,7 +236,6 @@ func TestDiff(t *testing.T) {
 			want:     []string{},
 		},
 	}
-
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := deps.Diff(tc.found, tc.declared)
