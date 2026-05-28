@@ -19,7 +19,7 @@ import (
 // concrete Installer so that tests can inject a mock without touching the
 // filesystem or spawning processes.
 func Run(args []string, inst installer.Installer) error {
-	fs := flag.NewFlagSet("dep-syncer", flag.ContinueOnError)
+	fs := flag.NewFlagSet("pkgmod", flag.ContinueOnError)
 	src := fs.String("src", ".", "Source directory to scan for JS/TS imports")
 
 	if err := fs.Parse(args); err != nil {

@@ -3,7 +3,7 @@
 //
 // Usage:
 //
-//	dep-syncer --src=./src
+//	dep-syncer --src=./src --manager=bun
 //
 // The tool reads package.json from the current working directory (the project
 // root), while --src controls which subdirectory is scanned for source files.
@@ -12,6 +12,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 
@@ -20,10 +21,27 @@ import (
 )
 
 func main() {
-	// Wire the real pnpm installer and hand off to the CLI runner.
-	// Keeping main() minimal means the entire program logic is testable
-	// through cmd.Run without spawning a subprocess.
-	if err := cmd.Run(os.Args[1:], &installer.Pnpm{}); err != nil {
+	// Parse the --manager flag here, in main, so that unsupported values are
+	// rejected immediately — before any scanning or file I/O takes place.
+	// All other flags are owned by cmd.Run.
+	managerFlag := flag.String("manager", "pnpm", "Package manager to use (pnpm, bun, npm, yarn)")
+	flag.Parse()
+
+	m, err := installer.ParseManager(*managerFlag)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	inst, err := installer.New(m)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Pass the remaining (non-manager) args and the concrete installer to the
+	// CLI runner.  cmd.Run knows nothing about which manager was chosen.
+	if err := cmd.Run(flag.Args(), inst); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
