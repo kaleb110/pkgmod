@@ -17,7 +17,7 @@ import (
 // Run is the program entry point.  It accepts the raw CLI arguments so that
 // tests can drive it without spawning a subprocess.
 func Run(args []string) error {
-	fs := flag.NewFlagSet("dep-syncer", flag.ContinueOnError)
+	fs := flag.NewFlagSet("pkgmod", flag.ContinueOnError)
 	src     := fs.String("src",     ".", "Source directory to scan for JS/TS imports")
 	// Default is empty string, not "pnpm" — an absent flag means "read from
 	// package.json" and we distinguish that from an explicit flag value.
@@ -35,7 +35,7 @@ func Run(args []string) error {
 
 	const pkgJSONPath = "package.json"
 	if _, err := os.Stat(pkgJSONPath); os.IsNotExist(err) {
-		return fmt.Errorf("package.json not found in the current directory — run dep-syncer from your project root")
+		return fmt.Errorf("package.json not found in the current directory — run pkgmod from your project root")
 	}
 
 	// ── Step 2: load package.json ─────────────────────────────────────────────
@@ -126,9 +126,14 @@ func Run(args []string) error {
 		fmt.Fprintf(os.Stdout, "  • %s\n", p)
 	}
 
-	selected, err := tui.PromptUser(missing)
+	selected, err := tui.PromptUser(managerName, missing)
 	if err != nil {
 		return err
+	}
+	// nil means the user pressed q / ctrl+c — aborted, not "confirmed zero".
+	if selected == nil {
+		fmt.Fprintln(os.Stdout, "Aborted.")
+		return nil
 	}
 	if len(selected) == 0 {
 		fmt.Fprintln(os.Stdout, "Nothing selected.")
