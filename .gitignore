@@ -1,1 +1,28 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
 bin/
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with Litmus
+*.out
+
+# Dependency directories (remove the comment below if you want to gitignore them)
+# vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Env files (sensitive information)
+.env
+.env.*
+
+
+# Added by goreleaser init:
+dist/
