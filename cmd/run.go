@@ -4,9 +4,11 @@
 package cmd
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/kaleb110/pkgmod/deps"
 	"github.com/kaleb110/pkgmod/installer"
@@ -18,12 +20,22 @@ import (
 // tests can drive it without spawning a subprocess.
 func Run(args []string) error {
 	fs := flag.NewFlagSet("pkgmod", flag.ContinueOnError)
-	src := fs.String("src", ".", "Source directory to scan for JS/TS imports")
+	src     := fs.String("src",     ".", "Source directory to scan for JS/TS imports")
 	// Default is empty string, not "pnpm" — an absent flag means "read from
 	// package.json" and we distinguish that from an explicit flag value.
 	manager := fs.String("manager", "", "Package manager override (pnpm, bun, npm, yarn)")
+	// --exclude accepts a comma-separated list of import prefixes to ignore.
+	// Useful for project-specific path aliases that aren't caught by the
+	// built-in rules (e.g. "virtual:,~icons/,~assets/").
+	exclude := fs.String("exclude", "", `Comma-separated import prefixes to ignore (e.g. "virtual:,~icons/")`)
 
 	if err := fs.Parse(args); err != nil {
+		// flag.ErrHelp is returned when the user passes -h or --help.
+		// With ContinueOnError the package prints usage automatically, so we
+		// just signal a clean exit rather than letting main print "error: ...".
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 
@@ -63,7 +75,7 @@ func Run(args []string) error {
 	if pkgFile.PackageManager == "" && *manager == "" {
 		return fmt.Errorf(
 			"cannot determine package manager: packageManager field is absent from package.json\n" +
-				"specify one with --manager (supported: pnpm, bun, npm, yarn)",
+			"specify one with --manager (supported: pnpm, bun, npm, yarn)",
 		)
 	}
 
@@ -99,7 +111,17 @@ func Run(args []string) error {
 
 	// ── Step 5: scan source files ─────────────────────────────────────────────
 
-	sc := scanner.New()
+	// Split the --exclude value into individual prefixes, trimming whitespace
+	// so "virtual:, ~icons/" and "virtual:,~icons/" both work.
+	var excludePrefixes []string
+	if *exclude != "" {
+		for _, p := range strings.Split(*exclude, ",") {
+			if trimmed := strings.TrimSpace(p); trimmed != "" {
+				excludePrefixes = append(excludePrefixes, trimmed)
+			}
+		}
+	}
+	sc := scanner.New(excludePrefixes)
 	found, err := sc.ScanDir(*src)
 	if err != nil {
 		return fmt.Errorf("scanning %q: %w", *src, err)

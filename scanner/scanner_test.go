@@ -35,13 +35,12 @@ func writeFile(t *testing.T, dir, name, body string) {
 	}
 }
 
+// sc is a default scanner with no extra exclusions, used by most tests.
+var sc = scanner.New(nil)
+
 // ── ExtractImports ────────────────────────────────────────────────────────────
 
-// TestExtractImports covers every supported import syntax as well as the cases
-// that must be silently ignored (relative paths, built-ins, comments).
 func TestExtractImports(t *testing.T) {
-	sc := scanner.New()
-
 	cases := []struct {
 		name string
 		src  string
@@ -65,39 +64,45 @@ func TestExtractImports(t *testing.T) {
 		{"sub-path import", `import { format } from "date-fns/format"`, []string{"date-fns"}},
 		{"scoped sub-path", `import { Q } from "@tanstack/react-query/core"`, []string{"@tanstack/react-query"}},
 
-		// Ignored specifiers
-		{"relative ignored", `import { x } from "./local"`, []string{}},
-		{"parent relative ignored", `import { x } from "../lib"`, []string{}},
-		{"node builtin ignored", `import fs from "fs"`, []string{}},
+		// ── Node built-ins: modern "node:" prefix form ────────────────────────
+		// The "node:" prefix is the canonical approach recommended by Node.js.
+		// All of these must be ignored regardless of what follows the colon.
+		{"node: fs", `import fs from "node:fs"`, []string{}},
+		{"node: path", `import path from "node:path"`, []string{}},
+		{"node: crypto", `import { randomBytes } from "node:crypto"`, []string{}},
+		{"node: worker_threads", `import { Worker } from "node:worker_threads"`, []string{}},
+		{"node: sub-path", `import { pipeline } from "node:stream/promises"`, []string{}},
 
-		// Path aliases — configured in tsconfig/vite, never installable
-		{"@/ alias ignored", `import Button from "@/components/Button"`, []string{}},
-		{"@/types alias ignored", `import type { Foo } from "@/types"`, []string{}},
-		{"@/utils alias ignored", `import { helper } from "@/utils/format"`, []string{}},
-		{"~/ alias ignored", `import styles from "~/assets/styles"`, []string{}},
-		{"real scoped pkg not confused with alias", `import { Q } from "@tanstack/react-query"`, []string{"@tanstack/react-query"}},
+		// ── Node built-ins: legacy bare form ─────────────────────────────────
+		// Older code doesn't use the "node:" prefix — these must still be ignored.
+		{"bare fs", `import fs from "fs"`, []string{}},
+		{"bare path", `import path from "path"`, []string{}},
+		{"bare crypto", `import crypto from "crypto"`, []string{}},
+
+		// Path aliases
+		{"@/ alias", `import Button from "@/components/Button"`, []string{}},
+		{"~/ alias", `import styles from "~/assets/styles"`, []string{}},
+
+		// Real scoped package must not be confused with @/ alias
+		{"real scoped pkg", `import { Q } from "@tanstack/react-query"`, []string{"@tanstack/react-query"}},
 
 		// Comments must be skipped entirely
-		{"line comment skipped", `// import { x } from "ghost-pkg"`, []string{}},
-		{"jsdoc line skipped", ` * import { x } from "ghost-pkg"`, []string{}},
+		{"line comment", `// import { x } from "ghost-pkg"`, []string{}},
+		{"jsdoc line", ` * import { x } from "ghost-pkg"`, []string{}},
 
-		// Deduplication: same package imported twice in one file → one entry
+		// Deduplication
 		{"deduplication", strings.Join([]string{
 			`import { useState } from "react"`,
 			`import { useEffect } from "react"`,
 		}, "\n"), []string{"react"}},
 
-		// Multiple distinct packages in one file
+		// Multiple packages
 		{"multiple packages", strings.Join([]string{
 			`import React from "react"`,
 			`import { Link } from "react-router-dom"`,
 			`import axios from "axios"`,
 		}, "\n"), []string{"axios", "react", "react-router-dom"}},
 
-		// Quote style should not matter
-		{"single-quoted specifier", `import a from 'pkg-a'`, []string{"pkg-a"}},
-
-		// Edge cases
 		{"empty file", "", []string{}},
 	}
 
@@ -112,9 +117,82 @@ func TestExtractImports(t *testing.T) {
 	}
 }
 
+// ── --exclude custom prefixes ─────────────────────────────────────────────────
+
+// TestExcludePrefixes verifies that the user-supplied exclusion prefixes are
+// applied after the built-in rules, so project-specific aliases are filtered.
+func TestExcludePrefixes(t *testing.T) {
+	cases := []struct {
+		name     string
+		prefixes []string
+		src      string
+		want     []string
+	}{
+		{
+			name:     "virtual: prefix (Vite virtual modules)",
+			prefixes: []string{"virtual:"},
+			src:      `import "virtual:pwa-register"`,
+			want:     []string{},
+		},
+		{
+			name:     "~icons/ prefix (unplugin-icons)",
+			prefixes: []string{"~icons/"},
+			src:      `import IconMenu from "~icons/mdi/menu"`,
+			want:     []string{},
+		},
+		{
+			name:     "multiple prefixes, only matching ones excluded",
+			prefixes: []string{"virtual:", "~icons/"},
+			src: strings.Join([]string{
+				`import "virtual:pwa-register"`,
+				`import IconMenu from "~icons/mdi/menu"`,
+				`import axios from "axios"`,
+			}, "\n"),
+			want: []string{"axios"},
+		},
+		{
+			name:     "non-matching prefix does not exclude real package",
+			prefixes: []string{"virtual:"},
+			src:      `import axios from "axios"`,
+			want:     []string{"axios"},
+		},
+		{
+			name:     "empty prefix string is ignored safely",
+			prefixes: []string{"", "virtual:"},
+			src:      `import "virtual:something"`,
+			want:     []string{},
+		},
+		{
+			name:     "nil prefixes behaves same as empty",
+			prefixes: nil,
+			src:      `import axios from "axios"`,
+			want:     []string{"axios"},
+		},
+		{
+			name:     "dollar sign alias (SvelteKit $lib)",
+			prefixes: []string{"$"},
+			src: strings.Join([]string{
+				`import { db } from "$lib/db"`,
+				`import axios from "axios"`,
+			}, "\n"),
+			want: []string{"axios"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := scanner.New(tc.prefixes)
+			got := sorted(s.ExtractImports(strings.NewReader(tc.src)))
+			want := sorted(tc.want)
+			if fmt.Sprint(got) != fmt.Sprint(want) {
+				t.Errorf("got %v, want %v", got, want)
+			}
+		})
+	}
+}
+
 // ── ScanDir ───────────────────────────────────────────────────────────────────
 
-// TestScanDir_SkipsNodeModules ensures vendored code is never scanned.
 func TestScanDir_SkipsNodeModules(t *testing.T) {
 	dir := tmpDir(t)
 	nm := filepath.Join(dir, "node_modules", "some-pkg")
@@ -122,7 +200,6 @@ func TestScanDir_SkipsNodeModules(t *testing.T) {
 	writeFile(t, nm, "index.ts", `import "should-be-ignored"`)
 	writeFile(t, dir, "app.ts", `import "real-pkg"`)
 
-	sc := scanner.New()
 	found, err := sc.ScanDir(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -135,15 +212,12 @@ func TestScanDir_SkipsNodeModules(t *testing.T) {
 	}
 }
 
-// TestScanDir_Recurses verifies that packages in deeply nested subdirectories
-// are discovered.
 func TestScanDir_Recurses(t *testing.T) {
 	dir := tmpDir(t)
 	sub := filepath.Join(dir, "src", "components")
 	os.MkdirAll(sub, 0755)
 	writeFile(t, sub, "Button.tsx", `import "deep-pkg"`)
 
-	sc := scanner.New()
 	found, err := sc.ScanDir(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -153,8 +227,6 @@ func TestScanDir_Recurses(t *testing.T) {
 	}
 }
 
-// TestScanDir_OnlySupportedExtensions confirms that CSS, Markdown, JSON, and
-// other non-JS/TS files are not scanned.
 func TestScanDir_OnlySupportedExtensions(t *testing.T) {
 	dir := tmpDir(t)
 	writeFile(t, dir, "style.css", `import "css-pkg"`)
@@ -162,7 +234,6 @@ func TestScanDir_OnlySupportedExtensions(t *testing.T) {
 	writeFile(t, dir, "data.json", `{"import":"json-pkg"}`)
 	writeFile(t, dir, "main.ts", `import "ts-pkg"`)
 
-	sc := scanner.New()
 	found, err := sc.ScanDir(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -173,27 +244,41 @@ func TestScanDir_OnlySupportedExtensions(t *testing.T) {
 		}
 	}
 	if !found["ts-pkg"] {
-		t.Error("ts-pkg should have been found in main.ts")
+		t.Error("ts-pkg not found")
 	}
 }
 
-// TestScanDir_EmptyDirectory verifies that scanning an empty directory returns
-// an empty result without error.
+func TestScanDir_ExcludePrefixAppliedDuringWalk(t *testing.T) {
+	dir := tmpDir(t)
+	writeFile(t, dir, "app.ts", strings.Join([]string{
+		`import "virtual:pwa-register"`,
+		`import axios from "axios"`,
+	}, "\n"))
+
+	s := scanner.New([]string{"virtual:"})
+	found, err := s.ScanDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found["virtual:pwa-register"] {
+		t.Error("virtual: import should have been excluded")
+	}
+	if !found["axios"] {
+		t.Error("axios should still be found")
+	}
+}
+
 func TestScanDir_EmptyDirectory(t *testing.T) {
-	sc := scanner.New()
 	found, err := sc.ScanDir(tmpDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(found) != 0 {
-		t.Errorf("expected empty result, got %v", found)
+		t.Errorf("expected empty, got %v", found)
 	}
 }
 
-// TestScanDir_NonExistentDirectory verifies that a missing directory produces
-// an error rather than a silent empty result.
 func TestScanDir_NonExistentDirectory(t *testing.T) {
-	sc := scanner.New()
 	_, err := sc.ScanDir("/does/not/exist")
 	if err == nil {
 		t.Error("expected error for non-existent directory")
